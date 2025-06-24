@@ -1,0 +1,145 @@
+# This script was written, tested and deployed by Joseph Dunagan for on behalf of Data Integrity Computer Systems
+# Import Syncro module
+#Import-Module $env:SyncroModule
+
+# Holds the struct
+$monitors = @()
+
+# API Vars
+$apiKey = "hAPI little key :)"
+$subdomain = "dicomputer"
+$headers = @{
+    "Authorization" = "Bearer $apiKey"
+    "Content-Type" = "application/json"
+}
+
+# Adds monitors to associated customer organization
+function addToSyncro {
+    param (
+        [array]$approvedMonitors,
+        [int]$custID
+    )
+
+    # Construct the API URL
+    $url = "https://$subdomain.syncromsp.com/api/v1/customer_assets"
+
+    Write-Host " ---------- Beginning to process $($approvedMonitors.Count) Monitor/s ----------"
+    foreach ($mon in $approvedMonitors) {
+        Write-Host "Processing monitor: $($mon.name)"
+
+        $body = @{
+            asset_type_name = "Monitor"
+            asset_serial    = $mon.serialNumber
+            name            = "zz - $($mon.name)"
+            customer_id     = [int]$custID
+            properties      = @{
+                "Asset Manufactured Year" = "$($mon.YearOfManufacture)"
+                "Asset Manufactured Week" = "$($mon.WeekOfManufacture)"
+            }
+        } | ConvertTo-Json -Depth 5
+
+        try {
+            Invoke-RestMethod -Uri $url -Method POST -Headers $headers -Body $body
+            Write-Host "Asset created successfully for cust: $custID"
+        } catch {
+            Write-Host "Error Invoking API: $($_.Exception.Message)"
+        }
+    }
+}
+
+# Grabs associated customer ID via the asset's serial number
+function GetCustID {
+    try{
+        $serial = (Get-WmiObject -Class Win32_BIOS).SerialNumber.ToUpper().Trim()
+
+        # Construct the API URL
+        $url = "https://$subdomain.syncromsp.com/api/v1/customer_assets?query=$serial"
+
+        # Make GET request
+        $response = Invoke-RestMethod -Uri $url -Method Get -Headers $headers
+
+        #Extract Cust ID data
+        switch ($response.assets.Count) {
+            1 {
+                $custID = $response.assets[0].customer_id
+                Write-Host "Successfully queried Customer ID: $custID"
+                return [int]$custID
+            }
+            { $_ -gt 1 } {
+                Write-Host "Error: Multiple assets returned with Serial tag: $serial"
+                exit 1
+            }
+            default {
+                Write-Host "Error: No asset found with Serial tag: $serial"
+                exit 1
+            }
+        }
+    } catch {
+        Write-Host "An error has occurred in GetCustID: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
+# Checks for cases where Get-CimInstance returns no useful data
+function VetMonitors {
+    try {
+        $validMonitors = @()
+
+        foreach ($mon in $monitors) {
+            if ($mon.serialNumber -and $mon.serialNumber.Trim() -ne "") {
+                # Clean name
+                $name = "$($mon["name"])" -replace '[\x00-\x1F\x7F]', ''
+
+                if ($name -eq "") {
+                    $mon.name = "Monitor"
+                    Write-Host "Valid Monitor: Monitor - Serial: $($mon.serialNumber) - Year: $($mon.YearOfManufacture) - Week $($mon.WeekOfManufacture)"
+                } else {
+                    Write-Host "Valid Monitor: $name - Serial: $($mon.serialNumber) - Year: $($mon.YearOfManufacture) - Week $($mon.WeekOfManufacture)"
+                }
+
+                # Add to valid list
+                $validMonitors += $mon
+            } else {
+                Write-Host "Invalid or incomplete monitor data detected."
+            }
+        }
+
+        if ($validMonitors.Count -gt 0) {
+            $custID = GetCustID
+            AddToSyncro -approvedMonitors $validMonitors -custID $custID
+        } else {
+            Write-Host "No valid monitors found. $($validMonitors)"
+            exit 1
+        }
+
+    } catch {
+        Write-Host "An error has occurred in VetMonitors: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
+# Obtain Monitors info
+function QueryMonitorInfo{
+    try{
+        foreach ($mon in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID) {
+            $monitor = @{
+                "name" = [System.Text.Encoding]::ASCII.GetString($mon.UserFriendlyName -ne 0).Trim()
+                "serialNumber" = [System.Text.Encoding]::ASCII.GetString($mon.SerialNumberID -ne 0).Trim()
+                "YearOfManufacture" = $mon.YearOfManufacture
+                "WeekOfManufacture" = $mon.WeekOfManufacture
+            }
+
+            $monitors += ,$monitor
+        }
+
+        VetMonitors
+
+    } catch {
+        Write-Host "Query for monitor failed: DDC/CI is most likely not supported or enabled"
+        Write-Host "An error has occurred in QueryMonitorInfo: $($_.Exception.Message)"
+        exit 1
+    }
+}
+
+
+QueryMonitorInfo
