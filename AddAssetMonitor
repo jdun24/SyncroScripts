@@ -35,6 +35,7 @@ function addToSyncro {
             properties      = @{
                 "Asset Manufactured Year" = "$($mon.YearOfManufacture)"
                 "Asset Manufactured Week" = "$($mon.WeekOfManufacture)"
+                "Brand"                   =  "$($mon.brand)"
             }
         } | ConvertTo-Json -Depth 5
 
@@ -127,6 +128,7 @@ function QueryMonitorInfo{
                 "serialNumber" = [System.Text.Encoding]::ASCII.GetString($mon.SerialNumberID -ne 0).Trim()
                 "YearOfManufacture" = $mon.YearOfManufacture
                 "WeekOfManufacture" = $mon.WeekOfManufacture
+                "Brand"             = [System.Text.Encoding]::ASCII.GetString($mon.ManufacturerName -ne 0).Trim()
             }
 
             $monitors += ,$monitor
