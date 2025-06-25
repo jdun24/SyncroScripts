@@ -6,7 +6,7 @@ Import-Module $env:SyncroModule
 $monitors = @()
 
 # API Vars
-$apiKey = "T660f2f5f0ddb8f444-10d90533950c84c37fd3eee53338ede3"
+$apiKey = "Hapi LITTLE KEY :)"
 $subdomain = "dicomputer"
 $headers = @{
     "Authorization" = "Bearer $apiKey"
