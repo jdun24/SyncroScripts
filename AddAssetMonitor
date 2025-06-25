@@ -1,12 +1,12 @@
 # This script was written, tested and deployed by Joseph Dunagan for on behalf of Data Integrity Computer Systems
 # Import Syncro module
-#Import-Module $env:SyncroModule
+Import-Module $env:SyncroModule
 
 # Holds the struct
 $monitors = @()
 
 # API Vars
-$apiKey = "hAPI little key :)"
+$apiKey = "T660f2f5f0ddb8f444-10d90533950c84c37fd3eee53338ede3"
 $subdomain = "dicomputer"
 $headers = @{
     "Authorization" = "Bearer $apiKey"
@@ -16,32 +16,32 @@ $headers = @{
 # Adds monitors to associated customer organization
 function addToSyncro {
     param (
-        [array]$approvedMonitors,
-        [int]$custID
+        [string]$orgName
     )
 
     # Construct the API URL
     $url = "https://$subdomain.syncromsp.com/api/v1/customer_assets"
 
-    Write-Host " ---------- Beginning to process $($approvedMonitors.Count) Monitor/s ----------"
-    foreach ($mon in $approvedMonitors) {
+    Write-Host " ---------- Beginning to process $($monitors.Count) Monitor/s ----------"
+    foreach ($mon in $monitors) {
         Write-Host "Processing monitor: $($mon.name)"
 
         $body = @{
             asset_type_name = "Monitor"
             asset_serial    = $mon.serialNumber
             name            = "zz - $($mon.name)"
-            customer_id     = [int]$custID
+            #customer_id     = [int]$custID
             properties      = @{
                 "Asset Manufactured Year" = "$($mon.YearOfManufacture)"
                 "Asset Manufactured Week" = "$($mon.WeekOfManufacture)"
-                "Brand"                   =  "$($mon.brand)"
+                "Brand"                   = "$($mon.brand)"
+                "Organization"            = "$($OrgName)"
             }
         } | ConvertTo-Json -Depth 5
 
         try {
             Invoke-RestMethod -Uri $url -Method POST -Headers $headers -Body $body
-            Write-Host "Asset created successfully for cust: $custID"
+            Write-Host "Asset created successfully for cust: $OrgName"
         } catch {
             Write-Host "Error Invoking API: $($_.Exception.Message)"
         }
@@ -49,7 +49,7 @@ function addToSyncro {
 }
 
 # Grabs associated customer ID via the asset's serial number
-function GetCustID {
+function GetOrganizationName {
     try{
         $serial = (Get-WmiObject -Class Win32_BIOS).SerialNumber.ToUpper().Trim()
 
@@ -62,9 +62,9 @@ function GetCustID {
         #Extract Cust ID data
         switch ($response.assets.Count) {
             1 {
-                $custID = $response.assets[0].customer_id
-                Write-Host "Successfully queried Customer ID: $custID"
-                return [int]$custID
+                $OrgName = $response.assets[0].customer.business_name
+                Write-Host "Successfully queried Org Name: $OrgName"
+                return $OrgName
             }
             { $_ -gt 1 } {
                 Write-Host "Error: Multiple assets returned with Serial tag: $serial"
@@ -76,53 +76,56 @@ function GetCustID {
             }
         }
     } catch {
-        Write-Host "An error has occurred in GetCustID: $($_.Exception.Message)"
+        Write-Host "An error has occurred in GetOrganizationName: $($_.Exception.Message)"
         exit 1
     }
 }
 
-# Checks for cases where Get-CimInstance returns no useful data
-function VetMonitors {
-    try {
-        $validMonitors = @()
+function IsExternal {
+    param(
+        [Parameter(Mandatory = $true)]
+        $monitorInstance
+    )
+    # VGA, S-Video, Composite, Component, DVI, HDMI, DisplayPort, USB
+    $whitelistedConnections = @(1, 2, 3, 4, 5, 6, 8, 10)
+    $connection = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorConnectionParams | Where-Object { $_.InstanceName -eq $monitorInstance.InstanceName }
 
-        foreach ($mon in $monitors) {
-            if ($mon.serialNumber -and $mon.serialNumber.Trim() -ne "") {
-                # Clean name
-                $name = "$($mon["name"])" -replace '[\x00-\x1F\x7F]', ''
-
-                if ($name -eq "") {
-                    $mon.name = "Monitor"
-                    Write-Host "Valid Monitor: Monitor - Serial: $($mon.serialNumber) - Year: $($mon.YearOfManufacture) - Week $($mon.WeekOfManufacture)"
-                } else {
-                    Write-Host "Valid Monitor: $name - Serial: $($mon.serialNumber) - Year: $($mon.YearOfManufacture) - Week $($mon.WeekOfManufacture)"
-                }
-
-                # Add to valid list
-                $validMonitors += $mon
-            } else {
-                Write-Host "Invalid or incomplete monitor data detected."
-            }
-        }
-
-        if ($validMonitors.Count -gt 0) {
-            $custID = GetCustID
-            AddToSyncro -approvedMonitors $validMonitors -custID $custID
-        } else {
-            Write-Host "No valid monitors found. $($validMonitors)"
-            exit 1
-        }
-
-    } catch {
-        Write-Host "An error has occurred in VetMonitors: $($_.Exception.Message)"
-        exit 1
+    # Filter only external monitors based on whitelisted connection types
+    if ($connection -and $whitelistedConnections -contains $connection.VideoOutputTechnology){
+        return $true
     }
+    return $false
+}
+
+function IsSerialNull {
+    param(
+        [Parameter(Mandatory = $true)]
+        $monitorInstance
+    )
+    
+    if ([System.Text.Encoding]::ASCII.GetString($monitorInstance.SerialNumberID -ne 0).Trim() -ne "") {
+        return $true
+    }
+    Write-Host "INVALID Monitor: $name - Serial: $($monitorInstance.serialNumber) - Year: $($monitorInstance.YearOfManufacture) - Week $($monitorInstance.WeekOfManufacture)"
+    return $false
+}
+
+# Keeping this function in case I need to add more check functions
+function CheckMonitor {
+    param(
+        [Parameter(Mandatory = $true)]
+        $monitorInstance
+    )
+    if ((IsExternal -monitorInstance $monitorInstance) -and (IsSerialNull -monitorInstance $monitorInstance)){
+        return $true
+    }
+    return $false
 }
 
 # Obtain Monitors info
-function QueryMonitorInfo{
-    try{
-        foreach ($mon in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID) {
+function Main {
+    foreach ($mon in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID) {
+        if (checkMonitor -monitorInstance $mon) {
             $monitor = @{
                 "name" = [System.Text.Encoding]::ASCII.GetString($mon.UserFriendlyName -ne 0).Trim()
                 "serialNumber" = [System.Text.Encoding]::ASCII.GetString($mon.SerialNumberID -ne 0).Trim()
@@ -131,17 +134,28 @@ function QueryMonitorInfo{
                 "Brand"             = [System.Text.Encoding]::ASCII.GetString($mon.ManufacturerName -ne 0).Trim()
             }
 
+            # Clean name of unseen characters
+            $name = "$($monitor["name"])" -replace '[\x00-\x1F\x7F]', ''
+
+            if ($name -eq "") {
+                $monitor["name"] = "Monitor"
+                Write-Host "Valid Monitor: Monitor - Serial: $($monitorInstance.serialNumber) - Year: $($monitorInstance.YearOfManufacture) - Week $($monitorInstance.WeekOfManufacture)"
+            } else {
+                Write-Host "Valid Monitor: $name - Serial: $($monitorInstance.serialNumber) - Year: $($monitorInstance.YearOfManufacture) - Week $($monitorInstance.WeekOfManufacture)"
+            }
+
             $monitors += ,$monitor
         }
+    }
 
-        VetMonitors
-
-    } catch {
-        Write-Host "Query for monitor failed: DDC/CI is most likely not supported or enabled"
-        Write-Host "An error has occurred in QueryMonitorInfo: $($_.Exception.Message)"
+    if ($monitors.Count -gt 0) {
+        $OrgName = GetOrganizationName
+        AddToSyncro -orgName $OrgName
+    } else {
+        Write-Host "No valid monitors found. $($monitors)"
         exit 1
     }
+
 }
 
-
-QueryMonitorInfo
+Main
